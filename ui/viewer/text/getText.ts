@@ -14,14 +14,24 @@ export function getText(
   size: number = 0.3,
   options: {
     backgroundColor?: string;
+    /** Stroke around background; default dark edge on light fills, light edge on dark fills */
+    backgroundStrokeColor?: string;
     borderRadius?: number;
     padding?: number;
+    /** When false, sprite stays same apparent size/shape on screen while panning or zooming the camera */
+    sizeAttenuation?: boolean;
   } = {}
 ): THREE.Sprite {
-  const { backgroundColor, borderRadius = 20, padding = 20 } = options;
+  const {
+    backgroundColor,
+    backgroundStrokeColor,
+    borderRadius = 20,
+    padding = 20,
+    sizeAttenuation = true,
+  } = options;
 
   // Create cache key from text, color and options
-  const cacheKey = `${text}|${color}|${backgroundColor}|${borderRadius}|${padding}`;
+  const cacheKey = `${text}|${color}|${backgroundColor}|${backgroundStrokeColor}|${borderRadius}|${padding}`;
 
   let texture = textureCache.get(cacheKey);
 
@@ -46,14 +56,15 @@ export function getText(
 
     if (backgroundColor) {
       context.fillStyle = backgroundColor;
-      context.strokeStyle = "rgba(255, 255, 255, 0.1)";
+      context.strokeStyle =
+        backgroundStrokeColor ?? "rgba(0, 0, 0, 0.2)";
       context.lineWidth = 2;
 
       const x = 2;
       const y = 2;
       const w = canvas.width - 4;
       const h = canvas.height - 4;
-      const r = borderRadius;
+      const r = Math.min(borderRadius, w / 2, h / 2);
 
       context.beginPath();
       context.moveTo(x + r, y);
@@ -93,6 +104,8 @@ export function getText(
     map: texture,
     transparent: true,
     depthTest: false,
+    depthWrite: false,
+    sizeAttenuation,
   });
 
   // Create sprite

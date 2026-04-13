@@ -2,6 +2,10 @@ import * as THREE from "three";
 import van, { State } from "vanjs-core";
 import { Grid } from "../grid/getGrid";
 import { Geometry } from "@awatif/components";
+import type { Display } from "../../display/getDisplay";
+import { VIEWER_POINT_DISPLAY_PX } from "../pointDisplayPx";
+import { createFilledSquareTexture } from "../screenSpaceMarkers";
+import { getText } from "../text/getText";
 
 export function getGeometry({
   geometry,
@@ -18,13 +22,24 @@ export function getGeometry({
   camera: THREE.Camera;
   rendererElm: HTMLCanvasElement;
   render: () => void;
-  display?: { geometry: State<boolean> };
+  display: Display;
 }): THREE.Group {
   const group = new THREE.Group();
 
   /* ---- Constants ---- */
-  const GEOMETRY_COLOR = new THREE.Color("yellow");
-  const POINT_SIZE = 7;
+  /** Lines / nodes / preview — high contrast on OpenJSCAD-style light grid */
+  const GEOMETRY_COLOR = new THREE.Color(0x1565c0);
+  /** Node id: white on red pill (high focus vs geometry blue) */
+  const NODE_LABEL_NUMBER_TEXT = "#ffffff";
+  const NODE_LABEL_NUMBER_BG = "#b71c1c";
+  const NODE_LABEL_NUMBER_STROKE = "rgba(255, 255, 255, 0.55)";
+  /** XY coordinate: green family (no pink / purple) */
+  const NODE_LABEL_COORD_TEXT = "#14532d";
+  const NODE_LABEL_COORD_BG = "#dcfce7";
+  const NODE_LABEL_COORD_STROKE = "rgba(20, 83, 45, 0.45)";
+  /** Pixel size; sizeAttenuation false + square map → constant screen squares when pan/zoom */
+  const POINT_SIZE = VIEWER_POINT_DISPLAY_PX;
+  const nodeSquareMap = createFilledSquareTexture();
 
   enum Mode {
     EDIT,
@@ -48,8 +63,8 @@ export function getGeometry({
   const selectionBox = document.createElement("div");
   selectionBox.style.cssText = `
     position: fixed;
-    border: 1px solid yellow;
-    background: rgba(255, 255, 0, 0.1);
+    border: 1px solid #1565c0;
+    background: rgba(21, 101, 192, 0.12);
     pointer-events: none;
     display: none;
     z-index: 1000; // TODO:put a logical number
@@ -109,7 +124,7 @@ export function getGeometry({
   lines.renderOrder = 3; // Ensure geometry lines render on top of mesh
   group.add(lines);
   van.derive(() => {
-    if (!display?.geometry || !display.geometry.val) return;
+    if (!display.geometry.val) return;
 
     const linesMap = geometry.lines.val;
     const pointsMap = geometry.points.val;
@@ -133,14 +148,12 @@ export function getGeometry({
     render();
   });
   van.derive(() => {
-    if (!display?.geometry) return;
     lines.visible = display.geometry.val;
 
     render();
   });
 
   van.derive(() => {
-    if (!display?.geometry) return;
     if (!display.geometry.val) {
       mode.val = Mode.DISABLED;
     } else if (mode.rawVal === Mode.DISABLED) {
@@ -152,7 +165,10 @@ export function getGeometry({
   const points = new THREE.Points(
     new THREE.BufferGeometry(),
     new THREE.PointsMaterial({
+      map: nodeSquareMap,
       color: GEOMETRY_COLOR,
+      transparent: true,
+      alphaTest: 0.01,
       size: POINT_SIZE,
       sizeAttenuation: false,
       depthTest: false,
@@ -176,9 +192,193 @@ export function getGeometry({
     render();
   });
   van.derive(() => {
-    if (!display?.geometry) return;
     points.visible = display.geometry.val;
 
+    render();
+  });
+
+  const nodeLabels = new THREE.Group();
+  nodeLabels.renderOrder = 105;
+  group.add(nodeLabels);
+
+  const elementLabels = new THREE.Group();
+  elementLabels.renderOrder = 106;
+  group.add(elementLabels);
+
+  const nodeLabelNumberOpts = {
+    backgroundColor: NODE_LABEL_NUMBER_BG,
+    backgroundStrokeColor: NODE_LABEL_NUMBER_STROKE,
+    borderRadius: 96,
+    padding: 14,
+    sizeAttenuation: false,
+  } as const;
+
+  const nodeLabelCoordOpts = {
+    backgroundColor: NODE_LABEL_COORD_BG,
+    backgroundStrokeColor: NODE_LABEL_COORD_STROKE,
+    borderRadius: 64,
+    padding: 12,
+    sizeAttenuation: false,
+  } as const;
+
+  /** Screen px along view “up” from node (+ = toward top of viewport) — scaled by displayScale in sync */
+  const halfNodePx = VIEWER_POINT_DISPLAY_PX * 0.5;
+  const numberOffsetScreenPx = halfNodePx + 1 + 8;
+  const coordBelowScreenPx = -(halfNodePx + 1 + 11);
+
+  const _labelAnchor = new THREE.Vector3();
+  const _labelFwd = new THREE.Vector3();
+  const _labelToNode = new THREE.Vector3();
+  const _labelRight = new THREE.Vector3();
+  const _labelScreenUp = new THREE.Vector3();
+
+  function syncNodeLabelScreenOffsets(): void {
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
+    const H = Math.max(1, rendererElm.clientHeight);
+    const tanHalfFov = Math.tan((camera.fov * Math.PI) / 360);
+    const s = displayScale.rawVal;
+
+    camera.getWorldDirection(_labelFwd);
+    const up = camera.up;
+
+    const syncContainer = (container: THREE.Object3D) => {
+      for (let i = 0; i < container.children.length; i++) {
+        const ch = container.children[i];
+        if (!(ch instanceof THREE.Sprite)) continue;
+        const ud = ch.userData as {
+          labelAnchor?: [number, number, number];
+          offsetScreenPx?: number;
+        };
+        if (ud.labelAnchor === undefined || ud.offsetScreenPx === undefined) continue;
+        const [ax, ay, az] = ud.labelAnchor;
+        _labelAnchor.set(ax, ay, az);
+        _labelToNode.subVectors(_labelAnchor, camera.position);
+        const depth = _labelToNode.dot(_labelFwd);
+        if (depth < 1e-3) continue;
+
+        const worldPerScreenPx = (2 * depth * tanHalfFov) / H;
+        const offsetWorld = ud.offsetScreenPx * s * worldPerScreenPx;
+
+        _labelRight.crossVectors(_labelFwd, up).normalize();
+        if (_labelRight.lengthSq() < 1e-10) continue;
+        _labelScreenUp.crossVectors(_labelRight, _labelFwd).normalize();
+
+        _labelAnchor.set(ax, ay, az);
+        _labelAnchor.addScaledVector(_labelScreenUp, offsetWorld);
+        _labelAnchor.addScaledVector(_labelFwd, -2 * worldPerScreenPx);
+
+        ch.position.copy(_labelAnchor);
+      }
+    };
+
+    syncContainer(nodeLabels);
+    syncContainer(elementLabels);
+  }
+
+  (group.userData as { syncNodeLabels?: () => void }).syncNodeLabels =
+    syncNodeLabelScreenOffsets;
+
+  van.derive(() => {
+    while (nodeLabels.children.length > 0) {
+      nodeLabels.remove(nodeLabels.children[0]);
+    }
+
+    const geomOn = display.geometry.val;
+    const showNum = display.nodeShowNumber.val;
+    const showCoord = display.nodeShowCoordinate.val;
+    if (!geomOn || (!showNum && !showCoord)) {
+      render();
+      return;
+    }
+
+    const s = displayScale.val;
+    const sizeId = 0.03 * s;
+    const sizeCoord = 0.027 * s;
+    const pointsMap = geometry.points.val;
+
+    pointsMap.forEach((pt, id) => {
+      const [x, y, z] = pt;
+
+      const coordStr = `(${x.toFixed(2)}, ${y.toFixed(2)})`;
+
+      if (showNum && showCoord) {
+        const spNum = getText(`${id}`, [x, y, z], NODE_LABEL_NUMBER_TEXT, sizeId, {
+            ...nodeLabelNumberOpts,
+          });
+        spNum.userData = {
+          labelAnchor: [x, y, z] as [number, number, number],
+          offsetScreenPx: numberOffsetScreenPx,
+        };
+        nodeLabels.add(spNum);
+
+        const spCoord = getText(coordStr, [x, y, z], NODE_LABEL_COORD_TEXT, sizeCoord, {
+            ...nodeLabelCoordOpts,
+          });
+        spCoord.userData = {
+          labelAnchor: [x, y, z] as [number, number, number],
+          offsetScreenPx: coordBelowScreenPx,
+        };
+        nodeLabels.add(spCoord);
+      } else if (showNum) {
+        const spNum = getText(`${id}`, [x, y, z], NODE_LABEL_NUMBER_TEXT, sizeId, {
+            ...nodeLabelNumberOpts,
+          });
+        spNum.userData = {
+          labelAnchor: [x, y, z] as [number, number, number],
+          offsetScreenPx: numberOffsetScreenPx,
+        };
+        nodeLabels.add(spNum);
+      } else {
+        const spCoord = getText(coordStr, [x, y, z], NODE_LABEL_COORD_TEXT, sizeCoord, {
+            ...nodeLabelCoordOpts,
+          });
+        spCoord.userData = {
+          labelAnchor: [x, y, z] as [number, number, number],
+          offsetScreenPx: numberOffsetScreenPx,
+        };
+        nodeLabels.add(spCoord);
+      }
+    });
+
+    syncNodeLabelScreenOffsets();
+    render();
+  });
+
+  van.derive(() => {
+    while (elementLabels.children.length > 0) {
+      elementLabels.remove(elementLabels.children[0]);
+    }
+
+    if (!display.geometry.val || !display.elementShowNumber.val) {
+      render();
+      return;
+    }
+
+    const s = displayScale.val;
+    const sizeId = 0.03 * s;
+    const linesMap = geometry.lines.val;
+    const pointsMap = geometry.points.val;
+
+    linesMap.forEach((line, lineId) => {
+      const start = pointsMap.get(line[0]);
+      const end = pointsMap.get(line[1]);
+      if (!start || !end) return;
+
+      const mx = (start[0] + end[0]) / 2;
+      const my = (start[1] + end[1]) / 2;
+      const mz = (start[2] + end[2]) / 2;
+
+      const sp = getText(`${lineId}`, [mx, my, mz], NODE_LABEL_NUMBER_TEXT, sizeId, {
+        ...nodeLabelNumberOpts,
+      });
+      sp.userData = {
+        labelAnchor: [mx, my, mz] as [number, number, number],
+        offsetScreenPx: 0,
+      };
+      elementLabels.add(sp);
+    });
+
+    syncNodeLabelScreenOffsets();
     render();
   });
 
@@ -232,7 +432,10 @@ export function getGeometry({
   const selectedPoints = new THREE.Points(
     new THREE.BufferGeometry(),
     new THREE.PointsMaterial({
+      map: nodeSquareMap,
       color: SELECTION_COLOR,
+      transparent: true,
+      alphaTest: 0.01,
       size: POINT_SIZE,
       sizeAttenuation: false,
       depthTest: false,
@@ -282,22 +485,20 @@ export function getGeometry({
   });
 
   const hitPoint = van.state<number[] | null>(null);
-  const gridObj = new THREE.Mesh(
-    new THREE.PlaneGeometry(grid.size.rawVal, grid.size.rawVal),
-  );
+  /** Unbounded XY work plane (Z = 0); raycast picks anywhere the ray meets it */
+  const zWorkPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+  const planeHit = new THREE.Vector3();
 
-  van.derive(() => {
-    const gridSize = grid.size.val;
-    gridObj.geometry.dispose();
-    gridObj.geometry = new THREE.PlaneGeometry(gridSize, gridSize);
-    gridObj.position.set(gridSize / 2, gridSize / 2, 0);
-    gridObj.updateMatrixWorld();
-  });
-
-  const getSnapFunction = () => {
+  const getGridSnap = () => {
     const step = grid.spacing.rawVal;
     return (v: number) => Math.round(v / step) * step;
   };
+
+  /** XY when grid is hidden: free placement, stored to 2 decimal places */
+  const quantizeXYNoGrid = (x: number, y: number): [number, number] => [
+    Math.round(x * 100) / 100,
+    Math.round(y * 100) / 100,
+  ];
 
   rendererElm.addEventListener("pointerdown", (e: PointerEvent) => {
     if (e.pointerType === "touch" || e.button !== 0) return;
@@ -338,12 +539,21 @@ export function getGeometry({
     raycaster.setFromCamera(pointer, camera);
     if (mode.val === Mode.DISABLED) return;
 
-    // Update hit point on grid
-    const gridHits = raycaster.intersectObject(gridObj, false);
-    if (gridHits.length) {
-      const snap = getSnapFunction();
-      const px = snap(gridHits[0].point.x);
-      const py = snap(gridHits[0].point.y);
+    // Hit infinite Z=0 plane (not a finite mesh — no ±extent click limit)
+    const planeIntersect = raycaster.ray.intersectPlane(zWorkPlane, planeHit);
+    if (planeIntersect !== null) {
+      const rawX = planeHit.x;
+      const rawY = planeHit.y;
+      const gridOn = grid.visible.rawVal;
+      let px: number;
+      let py: number;
+      if (gridOn) {
+        const snap = getGridSnap();
+        px = snap(rawX);
+        py = snap(rawY);
+      } else {
+        [px, py] = quantizeXYNoGrid(rawX, rawY);
+      }
       const pz = 0; // Grid is in XY plane, so Z should always be 0
       const curr = hitPoint.rawVal;
       if (!curr || curr[0] !== px || curr[1] !== py || curr[2] !== pz) {
@@ -750,7 +960,10 @@ export function getGeometry({
       new THREE.Float32BufferAttribute([0, 0, 0], 3),
     ),
     new THREE.PointsMaterial({
+      map: nodeSquareMap,
       color: GEOMETRY_COLOR,
+      transparent: true,
+      alphaTest: 0.01,
       size: POINT_SIZE,
       sizeAttenuation: false,
       depthTest: false,

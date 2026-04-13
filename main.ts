@@ -31,75 +31,13 @@ import {
 } from "@awatif/ui";
 
 const geometry: Geometry = {
-  points: van.state(
-    new Map([
-      [1, [5, 2, 0]],
-      [2, [5, 8, 0]],
-    ]),
-  ),
-  lines: van.state(new Map([[1, [1, 2]]])),
+  points: van.state(new Map()),
+  lines: van.state(new Map()),
   selection: van.state(null),
   designs: van.state(new Map()),
 };
 
-const components: Components = van.state(
-  new Map([
-    [
-      ComponentsType.LOADS,
-      [
-        {
-          name: "Lateral Load",
-          templateId: "point-load",
-          geometry: [2],
-          params: {
-            Fx: 300,
-            Fy: 0,
-            Fz: 0,
-            Mx: 0,
-            My: 0,
-            Mz: 0,
-          },
-        },
-      ],
-    ],
-    [
-      ComponentsType.SUPPORTS,
-      [
-        {
-          name: "Fixed Support",
-          templateId: "point-support",
-          geometry: [1],
-          params: {
-            type: "fixed",
-          },
-        },
-      ],
-    ],
-    [
-      ComponentsType.MESH,
-      [
-        {
-          name: "Mesh",
-          templateId: "line-mesh",
-          geometry: [1],
-          params: {
-            divisions: 8,
-          },
-        },
-      ],
-    ],
-    [
-      ComponentsType.DESIGN,
-      [
-        {
-          name: "Generic Member",
-          templateId: "generic-member",
-          geometry: [1],
-        },
-      ],
-    ],
-  ]),
-);
+const components: Components = van.state(new Map());
 
 const mesh: Mesh = {
   nodes: van.state([]),
@@ -119,9 +57,12 @@ const mesh: Mesh = {
 
 const display: Display = {
   grid: {
-    size: van.state(10),
-    spacing: van.state(0.5),
+    visible: van.state(true),
+    spacing: van.state(1),
   },
+  nodeShowNumber: van.state(false),
+  nodeShowCoordinate: van.state(false),
+  elementShowNumber: van.state(false),
   displayScale: van.state(1),
   geometry: van.state(true),
   mesh: van.state(true),

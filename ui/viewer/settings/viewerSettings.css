@@ -1,0 +1,117 @@
+.viewer-settings {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.viewer-settings > * {
+  pointer-events: auto;
+}
+
+.viewer-settings__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border, #3d3d3d);
+  border-radius: 8px;
+  background: var(--bg-tertiary, #2d2d2d);
+  color: var(--text-primary, #e0e0e0);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.viewer-settings__btn:hover {
+  background: var(--bg-hover, #3a3a3a);
+  border-color: var(--accent, #4a9eff);
+}
+
+.viewer-settings__btn svg {
+  width: 22px;
+  height: 22px;
+}
+
+.viewer-settings__menu {
+  min-width: 280px;
+  padding: 12px 14px;
+  border: 1px solid var(--border, #3d3d3d);
+  border-radius: 8px;
+  background: var(--bg-secondary, #252525);
+  box-shadow: 0 8px 24px var(--shadow, rgba(0, 0, 0, 0.35));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.viewer-settings__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+}
+
+.viewer-settings__row--grid {
+  justify-content: space-between;
+  row-gap: 8px;
+}
+
+.viewer-settings__spacing-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.viewer-settings__spacing-text {
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #b0b0b0);
+  white-space: nowrap;
+}
+
+.viewer-settings__inline-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  color: var(--text-primary, #e0e0e0);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.viewer-settings__node-heading {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary, #e0e0e0);
+  margin-right: 4px;
+}
+
+.viewer-settings__row--node {
+  padding-top: 4px;
+  border-top: 1px solid var(--border, #3d3d3d);
+}
+
+.viewer-settings__spacing-input {
+  width: 4.75rem;
+  min-width: 4rem;
+  padding: 5px 8px;
+  border: 1px solid var(--border, #3d3d3d);
+  border-radius: 4px;
+  background: var(--bg-primary, #1e1e1e);
+  color: var(--text-primary, #e0e0e0);
+  font-size: 0.8125rem;
+}
+
+.viewer-settings__spacing-input:focus {
+  outline: none;
+  border-color: var(--accent, #4a9eff);
+}

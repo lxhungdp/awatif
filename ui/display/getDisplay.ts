@@ -1,6 +1,6 @@
 import van, { State } from "vanjs-core";
 import { html, render } from "lit-html";
-import { Grid } from "../viewer/grid/getGrid";
+import type { Grid } from "../viewer/grid/getGrid";
 import { PointResultsDisplay } from "../viewer/pointResult/getPointResults";
 import { LineResultsDisplay } from "../viewer/lineResult/getLineResults";
 import { LoadSelection, LOAD_SELECTION_LABELS } from "@awatif/components";
@@ -9,6 +9,12 @@ import "./styles.css";
 
 export type Display = {
   grid: Grid;
+  /** Viewer gear menu: show point id next to nodes */
+  nodeShowNumber: State<boolean>;
+  /** Viewer gear menu: show (x, y) next to nodes (2D) */
+  nodeShowCoordinate: State<boolean>;
+  /** Viewer gear menu: show line/element id at segment midpoint */
+  elementShowNumber: State<boolean>;
   displayScale: State<number>;
   geometry: State<boolean>;
   mesh: State<boolean>;
@@ -26,31 +32,9 @@ export type Display = {
 export function getDisplay({ display }: { display: Display }): HTMLElement {
   const container = document.createElement("div");
 
-  const grid = display.grid;
-
   const template = () => html`
     <details id="display">
       <summary>Display</summary>
-      <div class="display-item">
-        <label>Grid Size & Spacing</label>
-        <input
-          type="number"
-          min="1"
-          max="50"
-          value=${grid.size.val}
-          @input=${(e: Event) =>
-            (grid.size.val = Number((e.target as HTMLInputElement).value))}
-        />
-        <select
-          @change=${(e: Event) =>
-            (grid.spacing.val = Number((e.target as HTMLSelectElement).value))}
-        >
-          <option value="1" ?selected=${grid.spacing.val === 1}>1</option>
-          <option value="0.5" ?selected=${grid.spacing.val === 0.5}>0.5</option>
-          <option value="0.2" ?selected=${grid.spacing.val === 0.2}>0.2</option>
-          <option value="0.1" ?selected=${grid.spacing.val === 0.1}>0.1</option>
-        </select>
-      </div>
       <div class="display-item">
         <label>Display Scale</label>
         <input

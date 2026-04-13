@@ -7,7 +7,6 @@ import {
   templates as Templates,
 } from "@awatif/components";
 import { getGrid } from "./grid/getGrid";
-import { getAxes } from "./axes/getAxes";
 import { getGeometry } from "./geometry/getGeometry";
 import { getMesh } from "./mesh/getMesh";
 import { getLoads } from "./loads/getLoads";
@@ -18,7 +17,15 @@ import { getPointResults } from "./pointResult/getPointResults";
 import { getLineResults } from "./lineResult/getLineResults";
 import { getExtrudeSections } from "./extrudeSections/getExtrudeSections";
 import { getExtrudeSectionAnimation } from "./extrudeSections/getExtrudeSectionAnimation";
+import { getViewerSettings } from "./settings/getViewerSettings";
 import { Display } from "../display/getDisplay";
+import { WORKSPACE_EXTENT } from "./workspaceExtent";
+import {
+  getJscadLightBackgroundCss,
+  getJscadLightSceneBackground,
+} from "./jscadLightTheme";
+import { createFilledCircleTexture } from "./screenSpaceMarkers";
+import { VIEWER_POINT_DISPLAY_PX } from "./pointDisplayPx";
 
 import "./style.css";
 
@@ -36,6 +43,7 @@ export function getViewer({
   templates?: typeof Templates;
 }): HTMLDivElement {
   const scene = new THREE.Scene();
+  scene.background = getJscadLightSceneBackground();
 
   const camera = new THREE.PerspectiveCamera(
     75,
@@ -48,11 +56,65 @@ export function getViewer({
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
-  const render = () => renderer.render(scene, camera);
+
+  let render: () => void;
 
   const container = document.createElement("div");
   container.id = "viewer";
+  container.style.background = getJscadLightBackgroundCss();
   container.appendChild(renderer.domElement);
+  container.appendChild(getViewerSettings(display));
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableRotate = false;
+  /* AutoCAD-style: middle button pan; right = zoom (dolly). Wheel unchanged. */
+  controls.mouseButtons = {
+    LEFT: THREE.MOUSE.ROTATE,
+    MIDDLE: THREE.MOUSE.PAN,
+    RIGHT: THREE.MOUSE.DOLLY,
+  };
+
+  const grid = display.grid;
+  const displayScale = display.displayScale;
+
+  const zCam = 8 * (WORKSPACE_EXTENT / 10);
+  camera.position.set(0, 0, zCam);
+  controls.target.set(0, 0, 0);
+  controls.update();
+
+  /* Same as blue nodes: Points + circle texture, fixed screen px (no Sprite distance scaling bug). */
+  const ORIGIN_DOT_Z = 0.008;
+  const originMap = createFilledCircleTexture("#ff0000");
+  const originGeometry = new THREE.BufferGeometry();
+  originGeometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute([0, 0, ORIGIN_DOT_Z], 3),
+  );
+  const originDot = new THREE.Points(
+    originGeometry,
+    new THREE.PointsMaterial({
+      map: originMap,
+      color: 0xff0000,
+      transparent: true,
+      alphaTest: 0.01,
+      size: VIEWER_POINT_DISPLAY_PX,
+      sizeAttenuation: false,
+      depthTest: true,
+      depthWrite: false,
+    }),
+  );
+  originDot.renderOrder = 10;
+  scene.add(originDot);
+
+  let geoGroupForSync: THREE.Group | null = null;
+
+  render = () => {
+    const sync = (
+      geoGroupForSync?.userData as { syncNodeLabels?: () => void }
+    )?.syncNodeLabels;
+    sync?.();
+    renderer.render(scene, camera);
+  };
 
   window.addEventListener("resize", () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -61,38 +123,30 @@ export function getViewer({
 
     render();
   });
-
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableRotate = false;
   controls.addEventListener("change", render);
 
-  // Objects
-  const grid = display.grid;
-  const displayScale = display.displayScale;
-
-  camera.position.set(
-    grid.size.rawVal / 2,
-    grid.size.rawVal / 2,
-    8 * (grid.size.rawVal / 10),
+  scene.add(
+    getGrid({
+      grid,
+      camera,
+      controls,
+      rendererDomElement: renderer.domElement,
+      render,
+    }),
   );
-  controls.target.set(grid.size.rawVal / 2, grid.size.rawVal / 2, 0);
-  controls.update();
 
-  scene.add(getGrid({ grid, render }));
-  scene.add(getAxes({ displayScale, render }));
-
-  if (geometry)
-    scene.add(
-      getGeometry({
-        geometry,
-        grid,
-        displayScale,
-        camera,
-        rendererElm: renderer.domElement,
-        render,
-        display,
-      }),
-    );
+  if (geometry) {
+    geoGroupForSync = getGeometry({
+      geometry,
+      grid,
+      displayScale,
+      camera,
+      rendererElm: renderer.domElement,
+      render,
+      display,
+    });
+    scene.add(geoGroupForSync);
+  }
 
   if (mesh) {
     scene.add(

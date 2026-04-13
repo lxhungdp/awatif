@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import van, { State } from "vanjs-core";
 import type { Mesh } from "@awatif/components";
+import { createFilledSquareTexture } from "../screenSpaceMarkers";
 
 export function getMesh({
   mesh,
@@ -13,12 +14,16 @@ export function getMesh({
 }): THREE.Group {
   const group = new THREE.Group();
 
-  // Render nodes
+  // Render nodes (square markers, constant screen size)
   const MESH_COLOR = new THREE.Color("#ababab"); // bright gray
+  const meshNodeSquareMap = createFilledSquareTexture();
   const points = new THREE.Points(
     new THREE.BufferGeometry(),
     new THREE.PointsMaterial({
+      map: meshNodeSquareMap,
       color: MESH_COLOR,
+      transparent: true,
+      alphaTest: 0.01,
       size: 4,
       sizeAttenuation: false,
       depthTest: false,
