@@ -18,6 +18,7 @@ import { getLineResults } from "./lineResult/getLineResults";
 import { getExtrudeSections } from "./extrudeSections/getExtrudeSections";
 import { getExtrudeSectionAnimation } from "./extrudeSections/getExtrudeSectionAnimation";
 import { getViewerSettings } from "./settings/getViewerSettings";
+import van from "vanjs-core";
 import { Display } from "../display/getDisplay";
 import { WORKSPACE_EXTENT } from "./workspaceExtent";
 import {
@@ -63,7 +64,7 @@ export function getViewer({
   container.id = "viewer";
   container.style.background = getJscadLightBackgroundCss();
   container.appendChild(renderer.domElement);
-  container.appendChild(getViewerSettings(display));
+  container.appendChild(getViewerSettings(display, geometry));
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableRotate = false;
@@ -116,6 +117,22 @@ export function getViewer({
     renderer.render(scene, camera);
   };
 
+  const applyViewMode = () => {
+    const is3d = display.viewMode.val === "3d";
+    controls.enableRotate = is3d;
+    if (!is3d) {
+      camera.position.set(0, 0, zCam);
+      controls.target.set(0, 0, 0);
+      controls.update();
+    }
+    render();
+  };
+
+  van.derive(() => {
+    void display.viewMode.val;
+    applyViewMode();
+  });
+
   window.addEventListener("resize", () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -128,7 +145,6 @@ export function getViewer({
   scene.add(
     getGrid({
       grid,
-      camera,
       controls,
       rendererDomElement: renderer.domElement,
       render,

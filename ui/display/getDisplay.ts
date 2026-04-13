@@ -7,8 +7,18 @@ import { LoadSelection, LOAD_SELECTION_LABELS } from "@awatif/components";
 
 import "./styles.css";
 
+/** Viewer gear → Draw: null = selection mode (no placement); default is both node and element. */
+export type DrawMode = "node" | "element" | "both";
+
+/** 2D: edit/select on canvas; LMB. 3D: orbit with LMB (view only), same as typical JSCAD navigation. */
+export type ViewMode = "2d" | "3d";
+
 export type Display = {
   grid: Grid;
+  /** null: canvas is in selection mode only; otherwise placement mode */
+  drawMode: State<DrawMode | null>;
+  /** 2d = current work-plane editor; 3d = camera orbit, geometry pointer input disabled */
+  viewMode: State<ViewMode>;
   /** Viewer gear menu: show point id next to nodes */
   nodeShowNumber: State<boolean>;
   /** Viewer gear menu: show (x, y) next to nodes (2D) */

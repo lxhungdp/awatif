@@ -7,6 +7,6 @@ export { getAnalysisStatus } from "./analysisStatus/getAnalysisStatus";
 export { getCanvas } from "./canvas/getCanvas";
 export { getCanvasBar, CanvasButtons } from "./canvasBar/getCanvasBar";
 
-export type { Display } from "./display/getDisplay";
+export type { Display, DrawMode, ViewMode } from "./display/getDisplay";
 export type { ActiveAnalysis } from "./components/analysisList/getAnalysisList";
 export type { AnalysisStatus } from "./analysisStatus/getAnalysisStatus";

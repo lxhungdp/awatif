@@ -54,6 +54,10 @@ export function getGeometry({
   let dragPoint: number | null = null; // Point ID
   let appendPoint: number | null = null; // Point ID
   let isPointerDown = false;
+  let pointerDownClient: { x: number; y: number } | null = null;
+
+  /** Distinguish click from box drag / node drag in selection mode (canvas) */
+  const CLICK_DRAG_PX = 6;
 
   // Selection box state
   let selectionStart: { x: number; y: number } | null = null;
@@ -111,6 +115,31 @@ export function getGeometry({
     if (nextAppendPoint !== appendPoint) {
       appendPoint = nextAppendPoint;
       if (mode.rawVal === Mode.APPEND) mode.val = Mode.EDIT;
+    }
+  });
+
+  van.derive(() => {
+    void display.drawMode.val;
+    appendPoint = null;
+    if (mode.rawVal === Mode.APPEND) mode.val = Mode.EDIT;
+  });
+
+  van.derive(() => {
+    void display.viewMode.val;
+    appendPoint = null;
+    dragPoint = null;
+    selectionStart = null;
+    selectionEnd = null;
+    selectionBox.style.display = "none";
+    isPointerDown = false;
+    pointerDownClient = null;
+    hitPoint.val = null;
+    if (
+      mode.rawVal === Mode.APPEND ||
+      mode.rawVal === Mode.SELECT ||
+      mode.rawVal === Mode.DRAG
+    ) {
+      mode.val = Mode.EDIT;
     }
   });
 
@@ -299,7 +328,7 @@ export function getGeometry({
     pointsMap.forEach((pt, id) => {
       const [x, y, z] = pt;
 
-      const coordStr = `(${x.toFixed(2)}, ${y.toFixed(2)})`;
+      const coordStr = `(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`;
 
       if (showNum && showCoord) {
         const spNum = getText(`${id}`, [x, y, z], NODE_LABEL_NUMBER_TEXT, sizeId, {
@@ -382,8 +411,8 @@ export function getGeometry({
     render();
   });
 
-  // Render selected lines highlight
-  const SELECTION_COLOR = new THREE.Color("cyan");
+  // Render selected lines highlight (high-contrast vs geometry blue)
+  const SELECTION_COLOR = new THREE.Color(0xd32f2f);
   const selectedLines = new THREE.LineSegments(
     new THREE.BufferGeometry(),
     new THREE.LineBasicMaterial({
@@ -500,18 +529,82 @@ export function getGeometry({
     Math.round(y * 100) / 100,
   ];
 
+  /** When grid is off, snap plane hit to nearest geometry node within tolerance (world XY). */
+  function snapXYToNearestGeometryPoint(
+    px: number,
+    py: number,
+    pz: number,
+  ): [number, number, number] {
+    const s = displayScale.rawVal;
+    const tol = Math.max(0.06, 0.22 * s);
+    const tol2 = tol * tol;
+    let best: [number, number, number] | null = null;
+    let bestD2 = tol2;
+    geometry.points.rawVal.forEach((pt) => {
+      const dx = px - pt[0];
+      const dy = py - pt[1];
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = [pt[0], pt[1], pt[2]];
+      }
+    });
+    return best ?? [px, py, pz];
+  }
+
+  const isSelectionCanvasMode = () => display.drawMode.rawVal === null;
+  const isView3d = () => display.viewMode.rawVal === "3d";
+
+  function syncRaycaster(e: Pick<PointerEvent, "clientX" | "clientY">) {
+    const rect = rendererElm.getBoundingClientRect();
+    pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    pointer.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+    raycaster.setFromCamera(pointer, camera);
+  }
+
+  function pointIdFromPointHit(hit: THREE.Intersection): number | null {
+    const hitIndex = hit.index ?? null;
+    if (hitIndex === null) return null;
+    const pointsEntries = Array.from(geometry.points.val.entries());
+    if (hitIndex < pointsEntries.length) return pointsEntries[hitIndex]![0];
+    return null;
+  }
+
+  function lineIdFromLineHit(hit: THREE.Intersection): number | null {
+    const idx = hit.index;
+    if (idx === null || idx === undefined) return null;
+    const seg = Math.floor(idx / 2);
+    const lineIds = [...geometry.lines.rawVal.keys()];
+    return seg >= 0 && seg < lineIds.length ? lineIds[seg]! : null;
+  }
+
   rendererElm.addEventListener("pointerdown", (e: PointerEvent) => {
     if (e.pointerType === "touch" || e.button !== 0) return;
     if (mode.val === Mode.DISABLED) return;
+    if (isView3d()) return;
 
-    // Selection mode: only when selection is not null
-    if (geometry.selection.rawVal !== null) {
-      selectionStart = { x: e.clientX, y: e.clientY };
-      selectionEnd = { x: e.clientX, y: e.clientY };
+    syncRaycaster(e);
+    pointerDownClient = { x: e.clientX, y: e.clientY };
+
+    if (isSelectionCanvasMode()) {
+      dragPoint = null;
+      const pointHits = raycaster.intersectObject(points, false);
+      if (pointHits.length) {
+        const id = pointIdFromPointHit(pointHits[0]!);
+        if (id !== null) dragPoint = id;
+      }
       isPointerDown = true;
+      if (dragPoint === null) {
+        selectionStart = { x: e.clientX, y: e.clientY };
+        selectionEnd = { x: e.clientX, y: e.clientY };
+      } else {
+        selectionStart = null;
+        selectionEnd = null;
+      }
       return;
     }
 
+    dragPoint = null;
     if (mode.val !== Mode.EDIT && mode.val !== Mode.APPEND) return;
 
     const hits = raycaster.intersectObject(points, false);
@@ -521,14 +614,8 @@ export function getGeometry({
     }
 
     isPointerDown = true;
-    // Convert hit index to point ID
-    const hitIndex = hits[0].index ?? null;
-    if (hitIndex !== null) {
-      const pointsEntries = Array.from(geometry.points.val.entries());
-      if (hitIndex < pointsEntries.length) {
-        dragPoint = pointsEntries[hitIndex][0]; // Get the key (ID)
-      }
-    }
+    const id = pointIdFromPointHit(hits[0]!);
+    if (id !== null) dragPoint = id;
   });
 
   rendererElm.addEventListener("pointermove", (e: PointerEvent) => {
@@ -538,6 +625,10 @@ export function getGeometry({
     pointer.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
     raycaster.setFromCamera(pointer, camera);
     if (mode.val === Mode.DISABLED) return;
+    if (isView3d()) {
+      hitPoint.val = null;
+      return;
+    }
 
     // Hit infinite Z=0 plane (not a finite mesh — no ±extent click limit)
     const planeIntersect = raycaster.ray.intersectPlane(zWorkPlane, planeHit);
@@ -554,7 +645,10 @@ export function getGeometry({
       } else {
         [px, py] = quantizeXYNoGrid(rawX, rawY);
       }
-      const pz = 0; // Grid is in XY plane, so Z should always be 0
+      let pz = 0;
+      if (!gridOn && mode.val !== Mode.DRAG) {
+        [px, py, pz] = snapXYToNearestGeometryPoint(px, py, 0);
+      }
       const curr = hitPoint.rawVal;
       if (!curr || curr[0] !== px || curr[1] !== py || curr[2] !== pz) {
         hitPoint.val = [px, py, pz];
@@ -563,19 +657,41 @@ export function getGeometry({
       hitPoint.val = null;
     }
 
-    // Handle selection box update (only when selection is not null)
-    if (isPointerDown && selectionStart && geometry.selection.rawVal !== null) {
+    if (
+      isPointerDown &&
+      selectionStart &&
+      dragPoint === null &&
+      isSelectionCanvasMode()
+    ) {
       selectionEnd = { x: e.clientX, y: e.clientY };
       mode.val = Mode.SELECT;
       updateSelectionBox();
       return;
     }
 
-    // Handle drag mode transition
-    if (isPointerDown && mode.val === Mode.EDIT) {
+    if (isPointerDown && mode.val === Mode.EDIT && !isSelectionCanvasMode()) {
       const hits = raycaster.intersectObject(points, false);
       if (hits.length) {
         mode.val = Mode.DRAG;
+      }
+    }
+
+    if (
+      isPointerDown &&
+      mode.val === Mode.EDIT &&
+      isSelectionCanvasMode() &&
+      dragPoint !== null &&
+      pointerDownClient
+    ) {
+      const moved = Math.hypot(
+        e.clientX - pointerDownClient.x,
+        e.clientY - pointerDownClient.y,
+      );
+      if (moved > CLICK_DRAG_PX) {
+        const hits = raycaster.intersectObject(points, false);
+        if (hits.length) {
+          mode.val = Mode.DRAG;
+        }
       }
     }
   });
@@ -606,47 +722,92 @@ export function getGeometry({
   rendererElm.addEventListener("pointerup", (e: PointerEvent) => {
     if (e.pointerType === "touch" || e.button !== 0) return;
     if (mode.val === Mode.DISABLED) return;
+    if (isView3d()) return;
 
+    syncRaycaster(e);
     const pointHits = raycaster.intersectObject(points, false);
+    const drawM = display.drawMode.rawVal;
 
-    // In Select mode, only handle selection - no editing or dragging
-    if (geometry.selection.rawVal !== null) {
-      handleSelection();
-      selectionStart = null;
-      selectionEnd = null;
-      selectionBox.style.display = "none";
-      mode.val = Mode.EDIT;
+    if (isSelectionCanvasMode()) {
+      if (mode.val === Mode.DRAG) {
+        mode.val = Mode.EDIT;
+        dragPoint = null;
+        pointerDownClient = null;
+        selectionStart = null;
+        selectionEnd = null;
+        selectionBox.style.display = "none";
+        isPointerDown = false;
+        return;
+      }
+
+      if (selectionStart !== null && dragPoint === null) {
+        const end = selectionEnd ?? selectionStart;
+        const w = Math.abs(end.x - selectionStart.x);
+        const h = Math.abs(end.y - selectionStart.y);
+        if (w < CLICK_DRAG_PX && h < CLICK_DRAG_PX) {
+          handleClickSelectSingle(e);
+        } else {
+          handleSelectionBoxReplace();
+        }
+        selectionStart = null;
+        selectionEnd = null;
+        selectionBox.style.display = "none";
+        mode.val = Mode.EDIT;
+        pointerDownClient = null;
+        isPointerDown = false;
+        return;
+      }
+
+      if (dragPoint !== null && pointerDownClient) {
+        const w = Math.abs(e.clientX - pointerDownClient.x);
+        const h = Math.abs(e.clientY - pointerDownClient.y);
+        if (
+          w < CLICK_DRAG_PX &&
+          h < CLICK_DRAG_PX &&
+          mode.val === Mode.EDIT
+        ) {
+          geometry.selection.val = { points: [dragPoint], lines: [] };
+        }
+        dragPoint = null;
+        pointerDownClient = null;
+        isPointerDown = false;
+        return;
+      }
+
+      pointerDownClient = null;
       isPointerDown = false;
       return;
     }
 
-    if (mode.val === Mode.SELECT) {
-      handleSelection();
-      selectionStart = null;
-      selectionEnd = null;
-      selectionBox.style.display = "none";
-      mode.val = Mode.EDIT;
-    } else if (mode.val === Mode.EDIT) {
-      if (pointHits.length) {
-        mode.val = Mode.APPEND;
-        const hitIndex = pointHits[0].index ?? null;
-        if (hitIndex !== null) {
-          const pointsEntries = Array.from(geometry.points.val.entries());
-          if (hitIndex < pointsEntries.length) {
-            appendPoint = pointsEntries[hitIndex][0]; // Get the key (ID)
-          }
+    if (mode.val === Mode.EDIT) {
+      if (drawM === "element") {
+        if (pointHits.length) {
+          mode.val = Mode.APPEND;
+          const id = pointIdFromPointHit(pointHits[0]!);
+          if (id !== null) appendPoint = id;
         }
-      } else {
+      } else if (pointHits.length) {
+        mode.val = Mode.APPEND;
+        const id = pointIdFromPointHit(pointHits[0]!);
+        if (id !== null) appendPoint = id;
+      } else if (drawM !== "element") {
         handleNewGeometry();
       }
     } else if (mode.val === Mode.DRAG) {
       mode.val = Mode.EDIT;
       dragPoint = null;
     } else if (mode.val === Mode.APPEND) {
-      handleAppendPoint();
+      if (drawM === "element") {
+        handleAppendPointElementOnly(e);
+      } else if (drawM === "node") {
+        handleAppendPointNodeOnly();
+      } else {
+        handleAppendPoint();
+      }
     }
 
-    isPointerDown = false; // important to be at this level
+    isPointerDown = false;
+    pointerDownClient = null;
   });
 
   function toScreenCoords(point: [number, number, number]): {
@@ -712,7 +873,48 @@ export function getGeometry({
     return t >= 0 && t <= 1 && u >= 0 && u <= 1;
   }
 
-  function handleSelection() {
+  function screenPointInsideRect(
+    screen: { x: number; y: number },
+    left: number,
+    top: number,
+    right: number,
+    bottom: number,
+  ): boolean {
+    return (
+      screen.x >= left &&
+      screen.x <= right &&
+      screen.y >= top &&
+      screen.y <= bottom
+    );
+  }
+
+  function handleClickSelectSingle(e: PointerEvent) {
+    syncRaycaster(e);
+    const ph = raycaster.intersectObject(points, false);
+    const lh = raycaster.intersectObject(lines, false);
+    const pHit = ph[0];
+    const lHit = lh[0];
+    if (pHit && lHit) {
+      if (pHit.distance <= lHit.distance) {
+        const id = pointIdFromPointHit(pHit);
+        if (id !== null) geometry.selection.val = { points: [id], lines: [] };
+      } else {
+        const lid = lineIdFromLineHit(lHit);
+        if (lid !== null) geometry.selection.val = { points: [], lines: [lid] };
+      }
+    } else if (pHit) {
+      const id = pointIdFromPointHit(pHit);
+      if (id !== null) geometry.selection.val = { points: [id], lines: [] };
+    } else if (lHit) {
+      const lid = lineIdFromLineHit(lHit);
+      if (lid !== null) geometry.selection.val = { points: [], lines: [lid] };
+    } else {
+      geometry.selection.val = null;
+    }
+  }
+
+  /** AutoCAD-style: L→R window (fully inside); R→L crossing (intersects). */
+  function handleSelectionBoxReplace() {
     if (!selectionStart || !selectionEnd) return;
 
     const left = Math.min(selectionStart.x, selectionEnd.x);
@@ -720,26 +922,19 @@ export function getGeometry({
     const top = Math.min(selectionStart.y, selectionEnd.y);
     const bottom = Math.max(selectionStart.y, selectionEnd.y);
 
-    const isAddMode = selectionEnd.x >= selectionStart.x; // Left-to-right = add
+    const isWindow = selectionEnd.x >= selectionStart.x;
     const pointsMap = geometry.points.rawVal;
     const linesMap = geometry.lines.rawVal;
 
-    // Find points in box
-    const pointsInBox: number[] = [];
+    const pointsSel: number[] = [];
     pointsMap.forEach((point, pointId) => {
       const screen = toScreenCoords(point);
-      if (
-        screen.x >= left &&
-        screen.x <= right &&
-        screen.y >= top &&
-        screen.y <= bottom
-      ) {
-        pointsInBox.push(pointId);
+      if (screenPointInsideRect(screen, left, top, right, bottom)) {
+        pointsSel.push(pointId);
       }
     });
 
-    // Find lines in box
-    const linesInBox: number[] = [];
+    const linesSel: number[] = [];
     linesMap.forEach((line, lineId) => {
       const [startId, endId] = line;
       const start = pointsMap.get(startId);
@@ -749,58 +944,60 @@ export function getGeometry({
       const startScreen = toScreenCoords(start);
       const endScreen = toScreenCoords(end);
 
-      if (lineIntersectsBox(startScreen, endScreen, left, top, right, bottom)) {
-        linesInBox.push(lineId);
+      if (isWindow) {
+        if (
+          screenPointInsideRect(startScreen, left, top, right, bottom) &&
+          screenPointInsideRect(endScreen, left, top, right, bottom)
+        ) {
+          linesSel.push(lineId);
+        }
+      } else if (
+        lineIntersectsBox(startScreen, endScreen, left, top, right, bottom)
+      ) {
+        linesSel.push(lineId);
       }
     });
 
-    const currentPoints = geometry.selection.rawVal?.points ?? [];
-    const currentLines = geometry.selection.rawVal?.lines ?? [];
-
-    if (isAddMode) {
-      // Add to selection
-      const newPoints = [...new Set([...currentPoints, ...pointsInBox])];
-      const newLines = [...new Set([...currentLines, ...linesInBox])];
-      geometry.selection.val = { points: newPoints, lines: newLines };
-    } else {
-      // Remove from selection
-      const newPoints = currentPoints.filter((id) => !pointsInBox.includes(id));
-      const newLines = currentLines.filter((id) => !linesInBox.includes(id));
-      geometry.selection.val = { points: newPoints, lines: newLines };
-    }
+    geometry.selection.val =
+      pointsSel.length === 0 && linesSel.length === 0
+        ? null
+        : { points: pointsSel, lines: linesSel };
   }
 
   rendererElm.addEventListener("contextmenu", (e: PointerEvent) => {
     e.preventDefault();
     if (mode.val === Mode.DISABLED) return;
+    if (isView3d()) return;
 
-    // In Select mode, right-click exits select mode
-    if (geometry.selection.rawVal !== null) {
-      geometry.selection.val = null;
+    if (isSelectionCanvasMode()) {
+      if (geometry.selection.rawVal !== null) {
+        geometry.selection.val = null;
+      }
       return;
     }
 
     const pointHits = raycaster.intersectObject(points, false);
 
-    // Remove point
     if (pointHits.length) {
       if (mode.val === Mode.EDIT) {
         const hitIndex = pointHits[0].index ?? null;
         if (hitIndex !== null) {
           const pointsEntries = Array.from(geometry.points.val.entries());
           if (hitIndex < pointsEntries.length) {
-            handleRemovePoint(pointsEntries[hitIndex][0]); // Get the key (ID)
+            handleRemovePoint(pointsEntries[hitIndex][0]);
           }
         }
       }
       return;
     }
 
-    // Exit modes
     if (pointHits.length) return;
 
     if (mode.val === Mode.APPEND) {
-      removeOrphanAppendPoint();
+      // Node-only mode: points are intentionally line-free; do not strip "orphan" nodes
+      if (display.drawMode.rawVal !== "node") {
+        removeOrphanAppendPoint();
+      }
       mode.val = Mode.EDIT;
     }
     appendPoint = null;
@@ -895,6 +1092,60 @@ export function getGeometry({
     appendPoint = targetId;
   }
 
+  function handleAppendPointNodeOnly() {
+    if (appendPoint === null) return;
+
+    const hp = hitPoint.rawVal;
+    if (!hp) return;
+
+    const pointsMap = geometry.points.rawVal;
+    const currentPoint = pointsMap.get(appendPoint);
+    if (!currentPoint) return;
+
+    if (currentPoint.every((val: number, i: number) => val === hp[i])) return;
+
+    let targetId: number | null = null;
+    for (const [id, point] of pointsMap) {
+      if (point.every((val: number, i: number) => val === hp[i])) {
+        targetId = id;
+        break;
+      }
+    }
+
+    if (targetId === null) {
+      targetId = nextPointId++;
+      const newPointsMap = new Map(pointsMap);
+      newPointsMap.set(targetId, hp as [number, number, number]);
+      geometry.points.val = newPointsMap;
+    }
+
+    appendPoint = targetId;
+  }
+
+  /** Pick target node by raycast (same as first pick); plane/hitPoint can miss arbitrary coordinates. */
+  function handleAppendPointElementOnly(e: PointerEvent) {
+    if (appendPoint === null) return;
+
+    const pointsMap = geometry.points.rawVal;
+    const linesMap = geometry.lines.rawVal;
+
+    if (!pointsMap.has(appendPoint)) return;
+
+    syncRaycaster(e);
+    const pointHits = raycaster.intersectObject(points, false);
+    if (!pointHits.length) return;
+
+    const targetId = pointIdFromPointHit(pointHits[0]!);
+    if (targetId === null || targetId === appendPoint) return;
+
+    const newLineId = nextLineId++;
+    const newLinesMap = new Map(linesMap);
+    newLinesMap.set(newLineId, [appendPoint, targetId]);
+    geometry.lines.val = newLinesMap;
+
+    appendPoint = targetId;
+  }
+
   function handleNewGeometry() {
     const hp = hitPoint.rawVal;
     if (!hp) return;
@@ -972,7 +1223,9 @@ export function getGeometry({
   group.add(marker);
 
   van.derive(() => {
-    if (!hitPoint.val || geometry.selection.val !== null) {
+    void display.drawMode.val;
+    void display.viewMode.val;
+    if (!hitPoint.val || isSelectionCanvasMode() || isView3d()) {
       marker.visible = false;
       coordTooltip.style.display = "none";
       render();
@@ -988,7 +1241,11 @@ export function getGeometry({
       const [x, y] = hitPoint.val;
       let text = `(${x.toFixed(2)}, ${y.toFixed(2)})`;
 
-      if (mode.val === Mode.APPEND && appendPoint !== null) {
+      if (
+        mode.val === Mode.APPEND &&
+        appendPoint !== null &&
+        display.drawMode.rawVal !== "node"
+      ) {
         const fromPoint = geometry.points.rawVal.get(appendPoint);
         if (fromPoint) {
           const dx = x - fromPoint[0];
@@ -1042,7 +1299,15 @@ export function getGeometry({
   });
 
   van.derive(() => {
-    if (mode.val !== Mode.APPEND || appendPoint === null || !hitPoint.val) {
+    void display.drawMode.val;
+    void display.viewMode.val;
+    if (
+      isView3d() ||
+      display.drawMode.rawVal === "node" ||
+      mode.val !== Mode.APPEND ||
+      appendPoint === null ||
+      !hitPoint.val
+    ) {
       previewLine.visible = false;
       render();
       return;
